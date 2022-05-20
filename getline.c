@@ -1,43 +1,143 @@
-#ifndef GETLINE_H
-#define GETLINE_H
+#include "main.h"
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-
-#include "hsh.h"
-
-#define DO_DEBUG 0
-
-#if DO_DEBUG
-#define DEBUG(x) (x)
-#else
-#define DEBUG(x) ((void)0)
-#endif
+void *_realloc(void *ptr, unsigned int old_size, unsigned int new_size);
+void assign_lineptr(char **lineptr, size_t *n, char *buffer, size_t b);
+ssize_t _getline(char **lineptr, size_t *n, FILE *stream);
 
 /**
- * struct fd - holds an open file descriptor buffer
- * @fd: the integer file descriptor
- * @buf: pointer to the char buffer
- * @i: current index in the buf
- * @len: current length of the buf
- * @next: next node in linked list
+ * _realloc - Reallocates a memory block using malloc and free.
+ * @ptr: A pointer to the memory previously allocated.
+ * @old_size: The size in bytes of the allocated space for ptr.
+ * @new_size: The size in bytes for the new memory block.
+ *
+ * Return: If new_size == old_size - ptr.
+ *         If new_size == 0 and ptr is not NULL - NULL.
+ *         Otherwise - a pointer to the reallocated memory block.
  */
-typedef struct fd
+void *_realloc(void *ptr, unsigned int old_size, unsigned int new_size)
 {
-	int fd;
-	char *buf;
-	size_t i;
-	size_t len;
-	struct fd *next;
-} FdBuf;
+	void *mem;
+	char *ptr_copy, *filler;
+	unsigned int index;
 
-#define READ_SIZE 1024
+	if (new_size == old_size)
+		return (ptr);
 
-char *__getline(const int fd);
-char *__read_buf(FdBuf *fb);
-FdBuf *get_fdbuf(FdBuf *head, const int fd);
-char *__strchr(char *s, char c, ssize_t size);
+	if (ptr == NULL)
+	{
+		mem = malloc(new_size);
+		if (mem == NULL)
+			return (NULL);
 
-#endif
+		return (mem);
+	}
+
+	if (new_size == 0 && ptr != NULL)
+	{
+		free(ptr);
+		return (NULL);
+	}
+
+	ptr_copy = ptr;
+	mem = malloc(sizeof(*ptr_copy) * new_size);
+	if (mem == NULL)
+	{
+		free(ptr);
+		return (NULL);
+	}
+
+	filler = mem;
+
+	for (index = 0; index < old_size && index < new_size; index++)
+		filler[index] = *ptr_copy++;
+
+	free(ptr);
+	return (mem);
+}
+
+/**
+ * assign_lineptr - Reassigns the lineptr variable for _getline.
+ * @lineptr: A buffer to store an input string.
+ * @n: The size of lineptr.
+ * @buffer: The string to assign to lineptr.
+ * @b: The size of buffer.
+ */
+void assign_lineptr(char **lineptr, size_t *n, char *buffer, size_t b)
+{
+	if (*lineptr == NULL)
+	{
+		if (b > 120)
+			*n = b;
+		else
+			*n = 120;
+		*lineptr = buffer;
+	}
+	else if (*n < b)
+	{
+		if (b > 120)
+			*n = b;
+		else
+			*n = 120;
+		*lineptr = buffer;
+	}
+	else
+	{
+		_strcpy(*lineptr, buffer);
+		free(buffer);
+	}
+}
+
+/**
+ * _getline - Reads input from a stream.
+ * @lineptr: A buffer to store the input.
+ * @n: The size of lineptr.
+ * @stream: The stream to read from.
+ *
+ * Return: The number of bytes read.
+ */
+ssize_t _getline(char **lineptr, size_t *n, FILE *stream)
+{
+	static ssize_t input;
+	ssize_t ret;
+	char c = 'x', *buffer;
+	int r;
+
+	if (input == 0)
+		fflush(stream);
+	else
+		return (-1);
+	input = 0;
+
+	buffer = malloc(sizeof(char) * 120);
+	if (!buffer)
+		return (-1);
+
+	while (c != '\n')
+	{
+		r = read(STDIN_FILENO, &c, 1);
+		if (r == -1 || (r == 0 && input == 0))
+		{
+			free(buffer);
+			return (-1);
+		}
+		if (r == 0 && input != 0)
+		{
+			input++;
+			break;
+		}
+
+		if (input >= 120)
+			buffer = _realloc(buffer, input, input + 1);
+
+		buffer[input] = c;
+		input++;
+	}
+	buffer[input] = '\0';
+
+	assign_lineptr(lineptr, n, buffer, input);
+
+	ret = input;
+	if (r != 0)
+		input = 0;
+	return (ret);
+}

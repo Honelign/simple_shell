@@ -1,152 +1,43 @@
+#ifndef GETLINE_H
+#define GETLINE_H
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+
 #include "hsh.h"
 
-/**
- * input_buf - buffers chained commands
- * @info: parameter struct
- * @buf: address of buffer
- * @len: address of len var
- *
- * Return: bytes read
- */
-ssize_t input_buf(info_t *info, char **buf, size_t *len)
-{
-	ssize_t r = 0;
-	size_t len_p = 0;
+#define DO_DEBUG 0
 
-	if (!*len) /* if nothing left in the buffer, fill it */
-	{
-		/*bfree((void **)info->cmd_buf);*/
-		free(*buf);
-		*buf = NULL;
-		signal(SIGINT, sigintHandler);
-#if USE_GETLINE
-		r = getline(buf, &len_p, stdin);
+#if DO_DEBUG
+#define DEBUG(x) (x)
 #else
-		r = _getline(info, buf, &len_p);
-		if (r == -1 && info->startup_fd > -1)
-		{
-			close(info->startup_fd);
-			info->startup_fd = -1;
-			r = _getline(info, buf, &len_p);
-		}
+#define DEBUG(x) ((void)0)
 #endif
-		if (r >= 0)
-		{
-			if (info->heredoc)
-				return (parse_heredoc(info, buf, r));
-			if (r > 0 && (*buf)[r - 1] == '\n')
-			{
-				(*buf)[r - 1] = '\0'; /* remove trailing newline */
-				r--;
-			}
-			info->linecount_flag = 1; /* TODO: check linecount for heredoc */
-			remove_comments(*buf);
-			build_history_list(info, *buf, info->histcount++);
-			/* if (_strchr(*buf, ';')) is this a command chain? */
-			{
-				*len = r;
-				info->cmd_buf = buf;
-			}
-		}
-	}
-	return (r);
-}
 
 /**
- * get_input - gets a line minus the newline
- * @info: parameter struct
- *
- * Return: bytes read
+ * struct fd - holds an open file descriptor buffer
+ * @fd: the integer file descriptor
+ * @buf: pointer to the char buffer
+ * @i: current index in the buf
+ * @len: current length of the buf
+ * @next: next node in linked list
  */
-ssize_t get_input(info_t *info)
+typedef struct fd
 {
-	static char *buf; /* the ';' command chain buffer */
-	static size_t i, j, len;
-	ssize_t r = 0;
-	char **buf_p = &(info->arg), *p;
+	int fd;
+	char *buf;
+	size_t i;
+	size_t len;
+	struct fd *next;
+} FdBuf;
 
-	_putchar(BUF_FLUSH);
-	r = input_buf(info, &buf, &len);
-	if (r == -1) /* EOF */
-		return (-1);
-	if (len)	/* we have commands left in the chain buffer */
-	{
-		j = i; /* init new iterator to current buf position */
-		p = buf + i; /* get pointer for return */
+#define READ_SIZE 1024
 
-		check_chain(info, buf, &j, i, len);
-		while (j < len) /* iterate to semicolon or end */
-		{
-			if (is_chain(info, buf, &j))
-				break;
-			j++;
-		}
+char *__getline(const int fd);
+char *__read_buf(FdBuf *fb);
+FdBuf *get_fdbuf(FdBuf *head, const int fd);
+char *__strchr(char *s, char c, ssize_t size);
 
-		i = j + 1; /* increment past nulled ';'' */
-		if (i >= len) /* reached end of buffer? */
-		{
-			i = len = 0; /* reset position and length */
-			info->cmd_buf_type = CMD_NORM;
-		}
-
-		*buf_p = p; /* pass back pointer to current command position */
-		return (_strlen(p)); /* return length of current command */
-	}
-
-	*buf_p = buf; /* else not a chain, pass back buffer from _getline() */
-	return (r); /* return length of buffer from _getline() */
-}
-
-/**
- * read_buf - reads a buffer
- * @info: parameter struct
- * @buf: buffer
- * @i: size
- *
- * Return: r
- */
-ssize_t read_buf(info_t *info, char *buf, size_t *i)
-{
-	ssize_t r = 0;
-
-	if (*i)
-		return (0);
-	r = read(info->readfd, buf, READ_BUF_SIZE);
-	if (r >= 0)
-		*i = r;
-	return (r);
-}
-
-/**
- * _getline - gets the next line of input from STDIN
- * @info: parameter struct
- * @ptr: address of pointer to buffer, preallocated or NULL
- * @length: size of preallocated ptr buffer if not NULL
- *
- * Return: s
- */
-int _getline(info_t *info, char **ptr, size_t *length)
-{
-	size_t r;
-
-	(void)length;
-	*ptr = __getline(info->startup_fd > -1 ? info->startup_fd : info->readfd);
-	if (!*ptr)
-		r = -1;
-	else
-		r = _strlen(*ptr);
-	return (r);
-}
-
-/**
- * sigintHandler - blocks ctrl-C
- * @sig_num: the signal number
- *
- * Return: void
- */
-void sigintHandler(__attribute__((unused))int sig_num)
-{
-	_puts("\n");
-	_puts("$ ");
-	_putchar(BUF_FLUSH);
-}
+#endif

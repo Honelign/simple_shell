@@ -1,145 +1,152 @@
-#include "_getline.h"
+#include "hsh.h"
 
 /**
- * __getline - gets a line of chars from a file descriptor
- * @fd: the file descriptor to read
+ * input_buf - buffers chained commands
+ * @info: parameter struct
+ * @buf: address of buffer
+ * @len: address of len var
  *
- * Return: pointer to the line
+ * Return: bytes read
  */
-char *__getline(const int fd)
+ssize_t input_buf(info_t *info, char **buf, size_t *len)
 {
-	static FdBuf head;
-	FdBuf *fb = NULL, *temp;
-	char *line = NULL;
+	ssize_t r = 0;
+	size_t len_p = 0;
 
-	if (fd == -1)
+	if (!*len) /* if nothing left in the buffer, fill it */
 	{
-		if (head.buf)
-			head.buf = (free(head.buf), NULL);
-		for (fb = head.next; fb;)
+		/*bfree((void **)info->cmd_buf);*/
+		free(*buf);
+		*buf = NULL;
+		signal(SIGINT, sigintHandler);
+#if USE_GETLINE
+		r = getline(buf, &len_p, stdin);
+#else
+		r = _getline(info, buf, &len_p);
+		if (r == -1 && info->startup_fd > -1)
 		{
-			if (fb->buf)
-			{
-				free(fb->buf);
-				fb->buf = NULL;
-			}
-			temp = fb;
-			fb = fb->next;
-			free(temp);
+			close(info->startup_fd);
+			info->startup_fd = -1;
+			r = _getline(info, buf, &len_p);
 		}
-		_memset((void *)&head, 0, sizeof(head));
-		return (NULL);
+#endif
+		if (r >= 0)
+		{
+			if (info->heredoc)
+				return (parse_heredoc(info, buf, r));
+			if (r > 0 && (*buf)[r - 1] == '\n')
+			{
+				(*buf)[r - 1] = '\0'; /* remove trailing newline */
+				r--;
+			}
+			info->linecount_flag = 1; /* TODO: check linecount for heredoc */
+			remove_comments(*buf);
+			build_history_list(info, *buf, info->histcount++);
+			/* if (_strchr(*buf, ';')) is this a command chain? */
+			{
+				*len = r;
+				info->cmd_buf = buf;
+			}
+		}
 	}
-	fb = get_fdbuf(&head, fd);
-	if (fb)
-		line = __read_buf(fb);
-	if (line && line[0] == '\n' && !line[1])
-		line[0] = 0;
-	return (line);
+	return (r);
 }
 
 /**
- * __read_buf - reads into the buffer
- * @fb: the fd buf struct
+ * get_input - gets a line minus the newline
+ * @info: parameter struct
  *
- * Return: 0 on success else -1 on error.
+ * Return: bytes read
  */
-char *__read_buf(FdBuf *fb)
+ssize_t get_input(info_t *info)
 {
-	char buf[READ_SIZE + 1], *p, *line;
+	static char *buf; /* the ';' command chain buffer */
+	static size_t i, j, len;
+	ssize_t r = 0;
+	char **buf_p = &(info->arg), *p;
+
+	_putchar(BUF_FLUSH);
+	r = input_buf(info, &buf, &len);
+	if (r == -1) /* EOF */
+		return (-1);
+	if (len)	/* we have commands left in the chain buffer */
+	{
+		j = i; /* init new iterator to current buf position */
+		p = buf + i; /* get pointer for return */
+
+		check_chain(info, buf, &j, i, len);
+		while (j < len) /* iterate to semicolon or end */
+		{
+			if (is_chain(info, buf, &j))
+				break;
+			j++;
+		}
+
+		i = j + 1; /* increment past nulled ';'' */
+		if (i >= len) /* reached end of buffer? */
+		{
+			i = len = 0; /* reset position and length */
+			info->cmd_buf_type = CMD_NORM;
+		}
+
+		*buf_p = p; /* pass back pointer to current command position */
+		return (_strlen(p)); /* return length of current command */
+	}
+
+	*buf_p = buf; /* else not a chain, pass back buffer from _getline() */
+	return (r); /* return length of buffer from _getline() */
+}
+
+/**
+ * read_buf - reads a buffer
+ * @info: parameter struct
+ * @buf: buffer
+ * @i: size
+ *
+ * Return: r
+ */
+ssize_t read_buf(info_t *info, char *buf, size_t *i)
+{
 	ssize_t r = 0;
 
-	p = __strchr(fb->buf + fb->i, '\n', fb->len - fb->i);
-	if (!fb->len || fb->i >= fb->len || !p)
-	{
-		while (1)
-		{
-			r = read(fb->fd, buf, READ_SIZE);
-			if (r < 0 || (r == 0 && !fb->len))
-				return (fb->buf ? (free(fb->buf), NULL) : NULL);
-			if (r == 0)
-			{
-				p = fb->buf + fb->len;
-				break;
-			}
-			fb->buf = _realloc(fb->buf, fb->len, fb->len + r + 1);
-			if (!fb->buf)
-				return (NULL);
-			_memcpy((void *)(fb->buf + fb->len), buf, r), fb->len += r;
-			p = __strchr(fb->buf + (fb->len - r), '\n', r);
-			if (p)
-			{
-				fb->buf[fb->len] = 0;
-				break;
-			}
-		}
-	}
-	*p = '\0';
-	line = malloc(1 + (p - (fb->buf + fb->i)));
-	if (!line)
-		return (NULL);
-	_memcpy((void *)line, fb->buf + fb->i, 1 + (p - (fb->buf + fb->i)));
-	fb->i = (p - fb->buf) + 1;
-	if (fb->i >= fb->len)
-	{
-		fb->i = fb->len = 0;
-		fb->buf = (free(fb->buf), NULL);
-	}
-	return (line);
+	if (*i)
+		return (0);
+	r = read(info->readfd, buf, READ_BUF_SIZE);
+	if (r >= 0)
+		*i = r;
+	return (r);
 }
 
 /**
- * get_fdbuf - adds a car to linked list
- * @head: pointer to head node
- * @fd: file descriptor of buffer to get
- * Return: pointer to the fd buf node
+ * _getline - gets the next line of input from STDIN
+ * @info: parameter struct
+ * @ptr: address of pointer to buffer, preallocated or NULL
+ * @length: size of preallocated ptr buffer if not NULL
+ *
+ * Return: s
  */
-FdBuf *get_fdbuf(FdBuf *head, const int fd)
+int _getline(info_t *info, char **ptr, size_t *length)
 {
-	FdBuf *node;
+	size_t r;
 
-	if (!head->buf && !head->fd && !head->next)
-	{
-		head->fd = fd;
-		return (head);
-	}
-	for (; head->next && head->next->fd <= fd; head = head->next)
-		;
-	if (head->fd == fd)
-		return (head);
-	node = malloc(sizeof(*node));
-	if (!node)
-		return (NULL);
-	if (fd < head->fd) /* need to copy head over and replace */
-	{
-		_memcpy((void *)node, (void *)head, sizeof(*head));
-		_memset((void *)head, 0, sizeof(*head));
-		head->fd = fd;
-		head->next = node;
-		return (head);
-	}
-	_memset((void *)node, 0, sizeof(*node));
-	node->fd = fd;
-	node->next = head->next;
-	head->next = node;
-	return (node);
+	(void)length;
+	*ptr = __getline(info->startup_fd > -1 ? info->startup_fd : info->readfd);
+	if (!*ptr)
+		r = -1;
+	else
+		r = _strlen(*ptr);
+	return (r);
 }
 
 /**
- **__strchr - locates a character in a string
- *@s: the string to be parsed
- *@c: the character to look for
- *@size: number of bytes to search
- *Return: (s) a pointer to the memory area s
+ * sigintHandler - blocks ctrl-C
+ * @sig_num: the signal number
+ *
+ * Return: void
  */
-char *__strchr(char *s, char c, ssize_t size)
+void sigintHandler(__attribute__((unused))int sig_num)
 {
-	if (!s)
-		return (NULL);
-	do {
-		if (*s == c)
-			return (s);
-		s++;
-	} while (--size > 0);
-	return (NULL);
+	_puts("\n");
+	_puts("$ ");
+	_putchar(BUF_FLUSH);
 }
